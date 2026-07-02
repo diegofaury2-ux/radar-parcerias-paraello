@@ -1,35 +1,40 @@
-// api/state.js — Radar de Parcerias Paraéllo
-// Upstash Redis REST API handler — NO password required (open access)
-
-const REDIS_KEY = 'radar-parcerias-paraello-v2:state:v1';
-
-export default async function handler(req, res) {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-
-  if (!url || !token) {
-    return res.status(500).json({ error: 'Redis not configured' });
-  }
-
-  if (req.method === 'GET') {
-    const r = await fetch(`${url}/get/${encodeURIComponent(REDIS_KEY)}`, {
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const data = await r.json();
-    res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ value: data.result ?? null });
-  }
-
-  if (req.method === 'POST') {
-    const body = req.body;
-    const payload = typeof body === 'string' ? body : JSON.stringify(body);
-    await fetch(`${url}/set/${encodeURIComponent(REDIS_KEY)}`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/plain' },
-      body: payload
-    });
-    return res.status(200).json({ ok: true });
-  }
-
-  res.status(405).json({ error: 'Method not allowed' });
+// Serverless: guarda/recupera estado via Upstash Redis.
+// GET -> {v,data}  POST -> {data} -> {ok,v}
+const REDIS_KEY = process.env.REDIS_KEY || 'radar-parcerias-paraello-v2:state:v1';
+function kvUrl(){return process.env.KV_REST_API_URL||process.env.UPSTASH_REDIS_REST_URL;}
+function kvToken(){return process.env.KV_REST_API_TOKEN||process.env.UPSTASH_REDIS_REST_TOKEN;}
+async function redis(cmd){
+  const r=await fetch(kvUrl(),{method:'POST',headers:{Authorization:'Bearer '+kvToken(),'Content-Type':'application/json'},body:JSON.stringify(cmd)});
+  const txt=await r.text().catch(()=>{throw new Error('redis '+r.status);});
+  if(!r.ok)throw new Error('redis '+r.status+': '+txt);
+  return JSON.parse(txt);
 }
+async function readState(){
+  const out=await redis(['GET',REDIS_KEY]);
+  const raw=out&&out.result;
+  if(!raw)return{v:0,data:null};
+  let p;try{p=JSON.parse(raw);}catch{return{v:0,data:null};}
+  if(p&&typeof p.v==='number')return p;
+  return{v:0,data:p};
+}
+module.exports=async(req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  if(!kvUrl()||!kvToken())return res.status(500).json({error:'storage_not_configured'});
+  try{
+    if(req.method==='GET'){
+      const s=await readState();
+      if(req.query&&req.query.v)return res.status(200).json({v:s.v});
+      return res.status(200).json(s);
+    }
+    if(req.method==='POST'){
+      let b=req.body;
+      if(typeof b==='string'){try{b=JSON.parse(b);}catch{b={};}}
+      const data=(b&&b.data!==undefined)?b.data:(typeof b==='object'?b:{});
+      const cur=await readState();
+      const nv=(cur.v||0)+1;
+      await redis(['SET',REDIS_KEY,JSON.stringify({v:nv,data})]);
+      return res.status(200).json({ok:true,v:nv});
+    }
+    res.status(405).json({error:'method_not_allowed'});
+  }catch(e){res.status(502).json({error:'storage_error',detail:String(e.message)});}
+};
