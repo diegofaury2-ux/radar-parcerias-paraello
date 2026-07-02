@@ -8,40 +8,35 @@
   const DEBOUNCE_MS = 1000;
   let lastKnown = null;
   let saveTimer = null;
-  let latestPayload = null; // captures value from last localStorage.setItem
+  let latestPayload = null;
 
   // ── helpers ──────────────────────────────────────────────────────────────
   function serialize() {
     try {
-      // Prefer the value captured from the app's last localStorage.setItem
-      if (latestPayload) return latestPayload;
-      // Fallback: read directly from storage using original getItem
+      if (latestPayload && latestPayload !== '{}') return latestPayload;
       const raw = _getItem.call(localStorage, STATE_KEY);
-      if (raw && raw !== 'null') return raw;
-      return JSON.stringify(window.S || {});
+      if (raw && raw !== 'null' && raw !== '{}') return raw;
+      // Last resort: serialize window.S
+      const s = JSON.stringify(window.S || {});
+      return s === '{}' ? null : s;
     } catch { return null; }
   }
 
   function applyState(newS) {
     try {
-      const current = _getItem.call(localStorage, STATE_KEY);
       const newStr = typeof newS === 'string' ? newS : JSON.stringify(newS);
-      if (current === newStr) return; // no change
-      // Update localStorage without triggering our interceptor
+      const current = _getItem.call(localStorage, STATE_KEY);
+      if (current === newStr) return;
       _setItem.call(localStorage, STATE_KEY, newStr);
-      // Update window.S if it exists
-      if (window.S && typeof newS === 'object') {
-        Object.assign(window.S, newS);
-      }
-      // Re-render
+      if (window.S && typeof newS === 'object') Object.assign(window.S, newS);
       if (typeof window.renderAll === 'function') window.renderAll();
       else {
+        if (typeof window.fillSelects    === 'function') window.fillSelects();
         if (typeof window.fillFacFilter  === 'function') window.fillFacFilter();
         if (typeof window.renderPainel   === 'function') window.renderPainel();
         if (typeof window.renderTabela   === 'function') window.renderTabela();
         if (typeof window.renderEventos  === 'function') window.renderEventos();
         if (typeof window.renderCalendario==='function') window.renderCalendario();
-        if (typeof window.fillSelects    === 'function') window.fillSelects();
       }
     } catch (e) { console.warn('[sync] applyState error', e); }
   }
@@ -51,7 +46,7 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       const payload = serialize();
-      if (!payload || payload === '{}') return;
+      if (!payload) return;
       lastKnown = payload;
       try {
         await fetch(API, {
@@ -68,7 +63,7 @@
   const _getItem = localStorage.getItem.bind(localStorage);
   localStorage.setItem = function (k, v) {
     _setItem(k, v);
-    if (k === STATE_KEY) {
+    if (k === STATE_KEY && v && v !== '{}' && v !== 'null') {
       latestPayload = v;
       scheduleSave();
     }
@@ -81,7 +76,7 @@
       const { value } = await r.json();
       if (!value) return;
       const payload = typeof value === 'string' ? value : JSON.stringify(value);
-      if (payload === lastKnown) return; // no change
+      if (payload === lastKnown) return;
       lastKnown = payload;
       const parsed = typeof value === 'string' ? JSON.parse(value) : value;
       applyState(parsed);
@@ -96,18 +91,27 @@
       if (value) {
         const payload = typeof value === 'string' ? value : JSON.stringify(value);
         lastKnown = payload;
-        // Pre-seed localStorage so the app boots with cloud data
         _setItem.call(localStorage, STATE_KEY, payload);
-      } else {
-        // Cloud empty — seed from current localStorage value
-        const localVal = _getItem.call(localStorage, STATE_KEY);
-        if (localVal && localVal !== 'null') {
-          latestPayload = localVal;
-          scheduleSave();
-        }
       }
     } catch (e) { console.warn('[sync] hydrate error', e); }
+    
+    // Boot the app
     bootFn();
+    
+    // After boot: if cloud was empty, seed it from the app's state
+    // The app's save() function writes to localStorage, triggering our interceptor
+    if (!lastKnown) {
+      setTimeout(() => {
+        // Try calling the app's built-in save function
+        if (typeof window.save === 'function') {
+          window.save();
+        } else {
+          // Fallback: manually serialize and save
+          scheduleSave();
+        }
+      }, 500);
+    }
+    
     setInterval(poll, POLL_MS);
   };
 })();
