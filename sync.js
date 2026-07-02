@@ -3,26 +3,45 @@
 
 (function () {
   const API = '/api/state';
+  const STATE_KEY = 'radar-parcerias-paraello-v2';
   const POLL_MS = 6000;
   const DEBOUNCE_MS = 1000;
   let lastKnown = null;
   let saveTimer = null;
-  let hydrated = false;
+  let latestPayload = null; // captures value from last localStorage.setItem
 
   // ── helpers ──────────────────────────────────────────────────────────────
   function serialize() {
-    try { return JSON.stringify(window.S || {}); } catch { return null; }
+    try {
+      // Prefer the value captured from the app's last localStorage.setItem
+      if (latestPayload) return latestPayload;
+      // Fallback: read directly from storage using original getItem
+      const raw = _getItem.call(localStorage, STATE_KEY);
+      if (raw && raw !== 'null') return raw;
+      return JSON.stringify(window.S || {});
+    } catch { return null; }
   }
 
   function applyState(newS) {
     try {
-      if (JSON.stringify(window.S) === JSON.stringify(newS)) return; // no change
-      Object.assign(window.S, newS);
+      const current = _getItem.call(localStorage, STATE_KEY);
+      const newStr = typeof newS === 'string' ? newS : JSON.stringify(newS);
+      if (current === newStr) return; // no change
+      // Update localStorage without triggering our interceptor
+      _setItem.call(localStorage, STATE_KEY, newStr);
+      // Update window.S if it exists
+      if (window.S && typeof newS === 'object') {
+        Object.assign(window.S, newS);
+      }
+      // Re-render
       if (typeof window.renderAll === 'function') window.renderAll();
       else {
-        if (typeof window.fillFacFilter === 'function') window.fillFacFilter();
-        if (typeof window.renderPainel  === 'function') window.renderPainel();
-        if (typeof window.renderTabela  === 'function') window.renderTabela();
+        if (typeof window.fillFacFilter  === 'function') window.fillFacFilter();
+        if (typeof window.renderPainel   === 'function') window.renderPainel();
+        if (typeof window.renderTabela   === 'function') window.renderTabela();
+        if (typeof window.renderEventos  === 'function') window.renderEventos();
+        if (typeof window.renderCalendario==='function') window.renderCalendario();
+        if (typeof window.fillSelects    === 'function') window.fillSelects();
       }
     } catch (e) { console.warn('[sync] applyState error', e); }
   }
@@ -32,7 +51,7 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       const payload = serialize();
-      if (!payload) return;
+      if (!payload || payload === '{}') return;
       lastKnown = payload;
       try {
         await fetch(API, {
@@ -46,9 +65,13 @@
 
   // ── intercept localStorage writes ────────────────────────────────────────
   const _setItem = localStorage.setItem.bind(localStorage);
+  const _getItem = localStorage.getItem.bind(localStorage);
   localStorage.setItem = function (k, v) {
     _setItem(k, v);
-    scheduleSave();
+    if (k === STATE_KEY) {
+      latestPayload = v;
+      scheduleSave();
+    }
   };
 
   // ── poll ──────────────────────────────────────────────────────────────────
@@ -71,15 +94,19 @@
       const r = await fetch(API + '?t=' + Date.now());
       const { value } = await r.json();
       if (value) {
-        const parsed = typeof value === 'string' ? JSON.parse(value) : value;
-        Object.assign(window.S, parsed);
-        lastKnown = typeof value === 'string' ? value : JSON.stringify(value);
+        const payload = typeof value === 'string' ? value : JSON.stringify(value);
+        lastKnown = payload;
+        // Pre-seed localStorage so the app boots with cloud data
+        _setItem.call(localStorage, STATE_KEY, payload);
       } else {
-        // cloud empty — seed from current S (already in localStorage)
-        scheduleSave();
+        // Cloud empty — seed from current localStorage value
+        const localVal = _getItem.call(localStorage, STATE_KEY);
+        if (localVal && localVal !== 'null') {
+          latestPayload = localVal;
+          scheduleSave();
+        }
       }
     } catch (e) { console.warn('[sync] hydrate error', e); }
-    hydrated = true;
     bootFn();
     setInterval(poll, POLL_MS);
   };
