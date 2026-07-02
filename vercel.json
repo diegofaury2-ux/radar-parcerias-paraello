@@ -6,6 +6,21 @@
       "dest": "/api/$1"
     },
     {
+      "src": "/sync.js",
+      "dest": "/sync.js"
+    },
+    {
+      "src": "/favicon.ico",
+      "dest": "/favicon.ico"
+    },
+    {
+      "src": "/logo.png",
+      "dest": "/logo.png"
+    },
+    {
+      "handle": "filesystem"
+    },
+    {
       "src": "(.*)",
       "dest": "/index.html"
     }
