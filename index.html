@@ -394,6 +394,8 @@ function load(){
 }
 let S=load();
 function save(){try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}}
+/* gancho do sync em nuvem: recarrega o estado do localStorage (hidratado pela nuvem) e re-renderiza in-place */
+window.__radarReload=function(){try{S=load();}catch(e){}try{renderAll();}catch(e){}};
 
 /* ---------- helpers ---------- */
 const $=id=>document.getElementById(id);
@@ -736,8 +738,8 @@ $('fCat').onchange=renderTabela;
 $('fAfin').onchange=renderTabela;
 
 /* ---------- render geral ---------- */
-function renderAll(){window.__cloudHydrate(function(){fillFacFilter();renderPainel();renderTabela();});}
-renderAll();
+function renderAll(){fillFacFilter();renderPainel();renderTabela();}
+window.__cloudHydrate(function(){renderAll();});
 </script>
 
 
